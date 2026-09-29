@@ -1,0 +1,44 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    init: true
+    volumes:
+      - radar-data:/app/data
+    expose:
+      - "8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/status',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+  collector:
+    build: .
+    command: ["python", "scheduler.py"]
+    restart: unless-stopped
+    init: true
+    volumes:
+      - radar-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+volumes:
+  radar-data:
+  caddy-data:
+  caddy-config:
