@@ -37,6 +37,41 @@ class FeishuTest(unittest.TestCase):
         feishu.deliver(self.db,'2026-09-29',self.f,sender,lambda _:None)
         self.assertEqual(len(sent),n)
 
+    def test_ccu_values_come_from_daily_and_weekly_baselines(self):
+        for day, count in [('2026-09-28',250),('2026-09-22',1000)]:
+            self.db.execute("INSERT INTO runs(id,started_at,status) VALUES (?,?,'success')",(day,day+'T02:00:00+00:00'))
+            self.db.commit()
+            radar.save_snapshot(self.db,day,'roblox','rolimons',day,day+'T02:00:00+00:00',
+                [dict(game_id='1',name='Game',ccu=count,url='https://www.roblox.com/games/1')],1,'test')
+        text='\n'.join(feishu.report_parts(self.db,'2026-09-29'))
+        row=next(line for line in text.splitlines() if line.startswith('#1 '))
+        self.assertIn('日CCU +250人（+100.00%）',row)
+        self.assertIn('周CCU -500人（-50.00%）',row)
+        self.assertIn('周 CCU 减少 Top 3',text)
+        report=radar.ranking(self.db,day='2026-09-29')
+        import csv,io
+        exported=list(csv.DictReader(io.StringIO(radar.csv_data(report).decode('utf-8-sig'))))[0]
+        self.assertEqual(float(exported['daily_ccu_pct']),100)
+        self.assertEqual(float(exported['weekly_ccu_pct']),-50)
+
+    def test_ccu_missing_and_zero_baseline(self):
+        self.assertEqual(feishu.ccu_change({'state':'no_baseline'}),'暂无基准')
+        self.assertEqual(feishu.ccu_change({'state':'outside_previous_sample'}),'前期未入样本')
+        self.assertEqual(feishu.ccu_change({'state':'matched','ccu_change':50,'ccu_pct':None}),'+50人（基准为0，涨跌幅不适用）')
+
+    def test_supplement_has_separate_deduplication(self):
+        sent=[]
+        sender=lambda f,text:sent.append(text)
+        feishu.deliver(self.db,'2026-09-29',self.f,sender,lambda _:None)
+        original=len(sent)
+        feishu.deliver(self.db,'2026-09-29',self.f,sender,lambda _:None,edition='ccu-update')
+        self.assertGreater(len(sent),original)
+        self.assertTrue(all('CCU变化补充' in text for text in sent[original:]))
+        total=len(sent)
+        feishu.deliver(self.db,'2026-09-29',self.f,sender,lambda _:None,edition='ccu-update')
+        feishu.deliver(self.db,'2026-09-29',self.f,sender,lambda _:None)
+        self.assertEqual(len(sent),total)
+
     def test_rejection_resumes_at_failed_part(self):
         sent=[]
         def first(f,t):

@@ -48,6 +48,37 @@ def change(item):
     return f"{item['rank_change']:+d}"
 
 
+def ccu_change(item):
+    if item["state"] == "no_baseline":
+        return "暂无基准"
+    if item["state"] != "matched":
+        return "前期未入样本"
+    delta, pct = item["ccu_change"], item["ccu_pct"]
+    rate = f"{pct:+.2f}%" if pct is not None else "基准为0，涨跌幅不适用"
+    return f"{delta:+,}人（{rate}）"
+
+
+def ccu_summary(report):
+    lines = ["", "CCU 变化（采集时刻快照对比，并非日均或周均）："]
+    for period, title in (("daily", "日"), ("weekly", "周")):
+        baseline = report["baselines"][period]
+        if not baseline:
+            lines.append(f"{title} CCU：暂无基准")
+            continue
+        games = [g for g in report["rows"] if g[period]["state"] == "matched"]
+        lines.append(f"{title}对比基准（UTC）：{baseline['observed_at']}；两期均在榜 {len(games)} 款")
+        for rising, label in ((True, "增加"), (False, "减少")):
+            selected = [g for g in games if (g[period]["ccu_change"] > 0 if rising else g[period]["ccu_change"] < 0)]
+            selected.sort(key=lambda g: ((-1 if rising else 1) * g[period]["ccu_change"], int(g["game_id"])))
+            lines.append(f"{title} CCU {label} Top 3（按人数）：")
+            for g in selected[:3]:
+                name = " ".join(g["name"].split())[:100]
+                lines.append(f"  {name}：{ccu_change(g[period])}")
+            if not selected:
+                lines.append("  无符合条件的可比游戏")
+    return lines
+
+
 def report_parts(db, day, keyword="Roblox日报"):
     date.fromisoformat(day)
     r = ranking(db, day=day)
@@ -72,14 +103,17 @@ def report_parts(db, day, keyword="Roblox日报"):
             if e["platform"] != "roblox":
                 continue
             summary.append(f"异常来源：{e['platform']}/{e['source']}；请查看本地采集日志。")
+    summary.extend(ccu_summary(r))
     summary.extend(["", "口径：Rolimon’s 收录范围 Top，不保证全站覆盖；CCU 是读取时在线人数。",
                     "不同来源采集时间和缓存可能不同；样本总和不代表 Roblox 全站总在线。",
-                    "首次采集无历史基准。以下分批发送完整榜单；CSV 同步保存在本机。"])
+                    "CCU变化 = 当前CCU − 前期CCU；涨跌幅 = 变化 ÷ 前期CCU。",
+                    "日对比昨日，周对比7天前；基准缺失不补零。首次基准可能不是同一时刻。",
+                    "以下分批发送完整榜单；CSV 同步保存在本机。"])
     parts = ["\n".join(summary)]
     lines = []
     for g in r["rows"]:
         name = " ".join(g["name"].split())[:100]
-        lines.append(f"#{g['rank']} {name} | ID {g['game_id']} | CCU {g['ccu']:,} | 日 {change(g['daily'])} | 周 {change(g['weekly'])}")
+        lines.append(f"#{g['rank']} {name} | ID {g['game_id']} | CCU {g['ccu']:,} | 日排名 {change(g['daily'])} | 周排名 {change(g['weekly'])} | 日CCU {ccu_change(g['daily'])} | 周CCU {ccu_change(g['weekly'])}")
     prefix = f"{keyword} | {day} | 完整榜单（正数为排名上升）\n"
     chunk = prefix
     for line in lines:
@@ -142,9 +176,11 @@ def send_with_retry(f, text, sender, pause):
             pause(delays[attempt])
 
 
-def deliver(db, day, f, sender=post, pause=time.sleep):
+def deliver(db, day, f, sender=post, pause=time.sleep, edition="daily"):
     validate(f)
-    target = hashlib.sha256(f["webhook_url"].encode()).hexdigest()
+    if edition not in ("daily", "ccu-update"):
+        raise ValueError("Unknown report edition")
+    target = hashlib.sha256((f["webhook_url"] + ("|ccu-update" if edition == "ccu-update" else "")).encode()).hexdigest()
     db.execute("""CREATE TABLE IF NOT EXISTS feishu_outbox (
         target TEXT NOT NULL, day TEXT NOT NULL, part INTEGER NOT NULL,
         body TEXT NOT NULL, state TEXT NOT NULL, sent_at TEXT,
@@ -152,7 +188,8 @@ def deliver(db, day, f, sender=post, pause=time.sleep):
     # Freeze the report on first send, including across retries and newer snapshots.
     with db:
         if not db.execute("SELECT 1 FROM feishu_outbox WHERE target=? AND day=?", (target, day)).fetchone():
-            parts = report_parts(db, day, f.get("keyword", "Roblox日报"))
+            keyword = f.get("keyword", "Roblox日报") + (" · CCU变化补充" if edition == "ccu-update" else "")
+            parts = report_parts(db, day, keyword)
             db.executemany("INSERT INTO feishu_outbox VALUES (?,?,?,?,'pending',NULL)",
                            [(target, day, i, f"{body}\n（日报第 {i+1}/{len(parts)} 条）") for i, body in enumerate(parts)])
     rows = db.execute("SELECT * FROM feishu_outbox WHERE target=? AND day=? ORDER BY part", (target, day)).fetchall()
@@ -186,6 +223,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--day", required=True)
     p.add_argument("--send", action="store_true", help="Actually send to configured group")
+    p.add_argument("--edition", choices=("daily", "ccu-update"), default="daily", help="Optional separately deduplicated CCU supplement")
     args = p.parse_args()
     db = connect(ROOT / config()["database"])
     try:
@@ -193,7 +231,7 @@ def main():
         if args.send:
             if not f.get("enabled"):
                 raise ValueError("Feishu is not enabled")
-            print(deliver(db, args.day, f))
+            print(deliver(db, args.day, f, edition=args.edition))
         else:
             parts = report_parts(db, args.day, f.get("keyword", "Roblox日报"))
             out = ROOT / "data" / f"feishu-preview-{args.day}.txt"

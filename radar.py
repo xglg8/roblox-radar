@@ -278,7 +278,7 @@ def comparison(db, day=None):
 def csv_data(report):
     out = io.StringIO(newline="")
     w = csv.writer(out)
-    w.writerow(["day", "platform", "source", "rank", "game_id", "name", "ccu", "daily_state", "daily_rank_change", "weekly_state", "weekly_rank_change", "daily_ccu_change", "weekly_ccu_change"])
+    w.writerow(["day", "platform", "source", "rank", "game_id", "name", "ccu", "daily_state", "daily_rank_change", "weekly_state", "weekly_rank_change", "daily_ccu_change", "weekly_ccu_change", "daily_ccu_pct", "weekly_ccu_pct"])
     s = report["snapshot"]
     for g in report["rows"]:
         # Prevent spreadsheet formula execution in third-party game titles.
@@ -287,7 +287,7 @@ def csv_data(report):
             name = "'" + name
         w.writerow([s["day"], s["platform"], s["source"], g["rank"], g["game_id"], name, g["ccu"],
                     g["daily"]["state"], g["daily"]["rank_change"], g["weekly"]["state"], g["weekly"]["rank_change"],
-                    g["daily"]["ccu_change"], g["weekly"]["ccu_change"]])
+                    g["daily"]["ccu_change"], g["weekly"]["ccu_change"], g["daily"]["ccu_pct"], g["weekly"]["ccu_pct"]])
     return ("\ufeff" + out.getvalue()).encode("utf-8")
 
 
