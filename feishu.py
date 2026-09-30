@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import date
 from urllib.error import HTTPError, URLError
@@ -11,6 +12,8 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from radar import ROOT, comparison, config, connect, now, ranking
+
+LOG = logging.getLogger("radar.feishu")
 
 
 def settings():
@@ -97,6 +100,10 @@ class NoRedirect(HTTPRedirectHandler):
 class Rejected(RuntimeError):
     """Provider explicitly rejected this message; safe to retry later."""
 
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
 
 def post(f, text):
     body = json.dumps(signed_payload(text, f.get("signing_secret", "")), ensure_ascii=False).encode()
@@ -106,7 +113,7 @@ def post(f, text):
             result = json.load(response)
     except HTTPError as exc:
         if exc.code in (400, 401, 403, 404, 429):
-            raise Rejected(f"Feishu HTTP {exc.code}") from None
+            raise Rejected(f"Feishu HTTP {exc.code}", code=exc.code) from None
         raise RuntimeError("Feishu HTTP response uncertain; check group before retrying") from None
     except (URLError, TimeoutError, ValueError, OSError):
         raise RuntimeError("Feishu delivery uncertain; check group before retrying") from None
@@ -114,7 +121,25 @@ def post(f, text):
     if code != 0:
         if code is None:
             raise RuntimeError("Unrecognized Feishu response; check group before retrying")
-        raise Rejected(f"Feishu rejected message, code={code}")
+        detail = str(result.get("msg", result.get("StatusMessage", "")))[:300]
+        for value in (f["webhook_url"], f["webhook_url"].rsplit("/", 1)[-1], f.get("signing_secret")):
+            if value:
+                detail = detail.replace(value, "[redacted]")
+        raise Rejected(f"Feishu rejected message, code={code}, detail={detail}", code=code)
+
+
+def send_with_retry(f, text, sender, pause):
+    # Only retry explicit rejections. Timeouts/unknown outcomes may already be delivered.
+    delays = (3, 10, 30)
+    for attempt in range(len(delays) + 1):
+        try:
+            sender(f, text)
+            return
+        except Rejected as exc:
+            if exc.code not in (429, 11233) or attempt == len(delays):
+                raise
+            LOG.warning("Feishu explicit rejection %s; retry %s/3 in %ss", exc, attempt + 1, delays[attempt])
+            pause(delays[attempt])
 
 
 def deliver(db, day, f, sender=post, pause=time.sleep):
@@ -143,7 +168,7 @@ def deliver(db, day, f, sender=post, pause=time.sleep):
             if updated.rowcount != 1:
                 raise RuntimeError("Another sender owns this report part")
         try:
-            sender(f, row["body"])
+            send_with_retry(f, row["body"], sender, pause)
         except Exception as exc:
             state = "pending" if isinstance(exc, Rejected) else "uncertain"
             with db:
@@ -152,6 +177,7 @@ def deliver(db, day, f, sender=post, pause=time.sleep):
         with db:
             db.execute("UPDATE feishu_outbox SET state='sent',sent_at=? WHERE target=? AND day=? AND part=?", (now(), *key))
         sent += 1
+        LOG.info("Feishu report %s: part %s/%s confirmed sent", day, row["part"] + 1, len(rows))
         pause(1.1)
     return f"{sent} parts sent; daily report complete"
 

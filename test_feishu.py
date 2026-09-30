@@ -57,6 +57,50 @@ class FeishuTest(unittest.TestCase):
     def test_stale_date_rejected(self):
         with self.assertRaises(ValueError):feishu.report_parts(self.db,'2026-09-30')
 
+    def test_transient_rejection_recovers_without_resending_summary(self):
+        received, attempts, waits = [], [], []
+        def sender(f, text):
+            attempts.append(text)
+            if len(attempts) == 2:
+                raise feishu.Rejected('temporary rejection', code=11233)
+            received.append(text)
+        with self.assertLogs('radar.feishu', level='WARNING'):
+            feishu.deliver(self.db,'2026-09-29',self.f,sender,waits.append)
+        total=len(feishu.report_parts(self.db,'2026-09-29'))
+        self.assertEqual(len(received), total)
+        self.assertEqual(len(set(received)), total)
+        self.assertEqual(len(attempts), total+1)
+        self.assertIn(3, waits)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM feishu_outbox WHERE state='sent'").fetchone()[0],total)
+
+    def test_retry_exhaustion_stays_pending(self):
+        attempts=[]
+        def reject(f,text):
+            attempts.append(text)
+            raise feishu.Rejected('temporary rejection',code=11233)
+        with self.assertLogs('radar.feishu', level='WARNING'), self.assertRaises(feishu.Rejected):
+            feishu.deliver(self.db,'2026-09-29',self.f,reject,lambda _:None)
+        self.assertEqual(len(attempts),4)
+        self.assertEqual(self.db.execute('SELECT state FROM feishu_outbox WHERE part=0').fetchone()[0],'pending')
+
+    def test_timeout_not_retried_by_backoff(self):
+        attempts=[]
+        def uncertain(f,text):
+            attempts.append(text)
+            raise TimeoutError('unknown delivery')
+        with self.assertRaises(TimeoutError):
+            feishu.send_with_retry(self.f,'test',uncertain,lambda _:self.fail('must not retry'))
+        self.assertEqual(len(attempts),1)
+
+    def test_http_rate_limit_is_retried(self):
+        attempts=[]
+        def sender(f,text):
+            attempts.append(text)
+            if len(attempts)==1:raise feishu.Rejected('HTTP 429',code=429)
+        with self.assertLogs('radar.feishu',level='WARNING'):
+            feishu.send_with_retry(self.f,'test',sender,lambda _:None)
+        self.assertEqual(len(attempts),2)
+
     def test_signature_shape_and_url_validation(self):
         p=feishu.signed_payload('hello','secret',123)
         self.assertEqual(p['timestamp'],'123')
