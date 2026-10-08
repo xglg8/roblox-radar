@@ -113,7 +113,7 @@ def report(db, day=None):
     for item in scopes:
         snap = db.execute("SELECT * FROM genre_snapshots WHERE day=? AND scope=? ORDER BY observed_at DESC,id DESC LIMIT 1", (day,item[0])).fetchone()
         rows, baselines = summarize(db, snap["id"]), {}
-        for period, days in (("daily",1),("weekly",7)):
+        for period, days in (("daily",1),("weekly",7),("half_monthly",15)):
             target = (date.fromisoformat(day)-timedelta(days=days)).isoformat()
             old = db.execute("SELECT * FROM genre_snapshots WHERE day=? AND scope=? AND cohort=? ORDER BY observed_at DESC,id DESC LIMIT 1", (target,snap["scope"],snap["cohort"])).fetchone()
             baselines[period] = dict(old) if old else None
@@ -135,12 +135,13 @@ def message_parts(db, day, keyword="Roblox日报"):
            "分类依据：官方类型及子类型。FPS仅在官方明确标注时单列，其余射击不猜测视角。"]
     for group in sorted(result["groups"],key=lambda g:(g["snapshot"]["scope"]!='all_regions',g["snapshot"]["scope"])):
         lines.append(f"\n【{group['snapshot']['name']}】{group['total_games']}款")
+        lines.append('对比基准：' + '；'.join(f"{label} {(group['baselines'][period] or {}).get('day', '暂无基准')}" for period, label in [('daily', '1天'), ('weekly', '7天'), ('half_monthly', '15天')]))
         for row in group["rows"]:
-            if not row["count"]:continue
+            if not row["count"] and not any(row[p]['count_change'] for p in ('daily','weekly','half_monthly')):continue
             def delta(period):
                 d=row[period]
                 return '暂无基准' if d['count_change'] is None else f"{d['count_change']:+d}款/{d['share_pp_change']:+.2f}百分点"
-            lines.append(f"{row['label']}：{row['count']}款（{row['share_pct']:.1f}%） | 日{delta('daily')} | 周{delta('weekly')}")
+            lines.append(f"{row['label']}：{row['count']}款（{row['share_pct']:.1f}%） | 1天{delta('daily')} | 7天{delta('weekly')} | 15天{delta('half_monthly')}")
         if group['snapshot']['scope']=='all_regions':
             for row in group['rows']:
                 if row['count'] and row['category']!='unknown':

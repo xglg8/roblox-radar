@@ -54,6 +54,30 @@ class GenreTest(unittest.TestCase):
         self.snap('2026-10-07',['fps'])
         self.assertEqual(genres.report(self.db,'2026-10-08')['groups'],[])
 
+    def test_seven_and_fifteen_day_changes_and_disappearing_category(self):
+        self.snap('2026-09-23',['simulation','fps'])
+        self.snap('2026-10-01',['simulation','simulation','fps','unknown'])
+        self.snap('2026-10-08',['simulation','simulation','simulation','unknown'])
+        group=genres.report(self.db,'2026-10-08')['groups'][0]
+        row=next(g for g in group['rows'] if g['category']=='simulation')
+        self.assertEqual(group['baselines']['half_monthly']['day'],'2026-09-23')
+        self.assertEqual(row['weekly'],{'count_change':1,'share_pp_change':25})
+        self.assertEqual(row['half_monthly'],{'count_change':2,'share_pp_change':25})
+        message='\n'.join(genres.message_parts(self.db,'2026-10-08'))
+        self.assertIn('15天 2026-09-23',message)
+        self.assertIn('FPS：0款',message)
+        self.assertIn('15天-1款/-50.00百分点',message)
+
+    def test_fifteen_days_does_not_use_nearby_date_or_other_cohort(self):
+        self.snap('2026-09-23',['fps'],cohort='other')
+        self.snap('2026-09-24',['fps'])
+        self.snap('2026-10-08',['simulation'])
+        group=genres.report(self.db,'2026-10-08')['groups'][0]
+        self.assertIsNone(group['baselines']['half_monthly'])
+        for row in group['rows']:
+            self.assertIsNone(row['half_monthly']['count_change'])
+            self.assertIsNone(row['half_monthly']['share_pp_change'])
+
     def test_empty_categories_remain_available_as_baselines(self):
         self.snap('2026-10-07',['simulation'])
         self.snap('2026-10-08',['fps'])
