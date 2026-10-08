@@ -1,5 +1,7 @@
 # Roblox Radar
 
+新增最近流行游戏的模拟器、FPS、RPG等类型构成与日／周占比变化，支持总览及五地区切换，详见 [类型统计口径](GENRES.md)。
+
 现已支持北美、南美、欧洲、东南亚、日韩的固定国家样本增长热度趋势，详见 [地区统计口径](REGIONS.md)。地区指数来自国家 Top Trending 榜单，不是地区实际 CCU。
 
 当前模式：**只采集 Roblox**，Steam 已在配置中关闭。每天北京时间 10:00 执行 `python radar.py daily`，采集后自动推送到已配置的飞书群；未配置 Webhook 时仅保存在本机。接入步骤见 [FEISHU.md](FEISHU.md)。不部署公网服务，原有 Steam 历史保留。

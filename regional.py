@@ -60,7 +60,8 @@ def parse_sample(payload, country, device="all"):
             raise ValueError(f"Invalid country ranking: {country}")
         seen.add(gid)
         # Preserve upstream order; playerCount is global CCU and intentionally ignored.
-        rows.append({"game_id": gid, "name": g["name"], "rank": index})
+        rows.append({"game_id": gid, "name": g["name"], "rank": index,
+                     "universe_id": g.get("universeId"), "genre_l1": g.get("genreL1")})
     return rows
 
 

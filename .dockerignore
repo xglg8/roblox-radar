@@ -3,6 +3,7 @@
 !radar.py
 !feishu.py
 !regional.py
+!genre_trends.py
 !regions.json
 !scheduler.py
 !dashboard.html
