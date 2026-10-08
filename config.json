@@ -3,6 +3,7 @@
   "top_n": 500,
   "timezone_offset_hours": 8,
   "steam_enabled": false,
+  "regional_enabled": true,
   "request_interval_seconds": 0.35,
   "request_timeout_seconds": 25,
   "request_attempts": 3

@@ -2,6 +2,8 @@
 !Dockerfile
 !radar.py
 !feishu.py
+!regional.py
+!regions.json
 !scheduler.py
 !dashboard.html
 !config.json

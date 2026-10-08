@@ -1,5 +1,7 @@
 # Roblox Radar
 
+现已支持北美、南美、欧洲、东南亚、日韩的固定国家样本增长热度趋势，详见 [地区统计口径](REGIONS.md)。地区指数来自国家 Top Trending 榜单，不是地区实际 CCU。
+
 当前模式：**只采集 Roblox**，Steam 已在配置中关闭。每天北京时间 10:00 执行 `python radar.py daily`，采集后自动推送到已配置的飞书群；未配置 Webhook 时仅保存在本机。接入步骤见 [FEISHU.md](FEISHU.md)。不部署公网服务，原有 Steam 历史保留。
 
 每日 Roblox CCU Top 500、日／周排名变化、Roblox 官方／第三方同游戏数据核对，以及飞书群日报。Python 3.11+，仅使用标准库，无需 pip 安装。代码保留 Steam 对比适配器，但当前配置关闭 Steam 采集，飞书日报仅包含 Roblox。

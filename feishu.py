@@ -123,6 +123,9 @@ def report_parts(db, day, keyword="Roblox日报"):
         chunk += line + "\n"
     if chunk != prefix:
         parts.append(chunk)
+    if config().get("regional_enabled", False):
+        from regional import message_parts
+        parts.extend(message_parts(db, day, keyword))
     return parts
 
 
@@ -178,9 +181,9 @@ def send_with_retry(f, text, sender, pause):
 
 def deliver(db, day, f, sender=post, pause=time.sleep, edition="daily"):
     validate(f)
-    if edition not in ("daily", "ccu-update"):
+    if edition not in ("daily", "ccu-update", "regions"):
         raise ValueError("Unknown report edition")
-    target = hashlib.sha256((f["webhook_url"] + ("|ccu-update" if edition == "ccu-update" else "")).encode()).hexdigest()
+    target = hashlib.sha256((f["webhook_url"] + ("|" + edition if edition != "daily" else "")).encode()).hexdigest()
     db.execute("""CREATE TABLE IF NOT EXISTS feishu_outbox (
         target TEXT NOT NULL, day TEXT NOT NULL, part INTEGER NOT NULL,
         body TEXT NOT NULL, state TEXT NOT NULL, sent_at TEXT,
@@ -189,7 +192,11 @@ def deliver(db, day, f, sender=post, pause=time.sleep, edition="daily"):
     with db:
         if not db.execute("SELECT 1 FROM feishu_outbox WHERE target=? AND day=?", (target, day)).fetchone():
             keyword = f.get("keyword", "Roblox日报") + (" · CCU变化补充" if edition == "ccu-update" else "")
-            parts = report_parts(db, day, keyword)
+            if edition == "regions":
+                from regional import message_parts
+                parts = message_parts(db, day, keyword)
+            else:
+                parts = report_parts(db, day, keyword)
             db.executemany("INSERT INTO feishu_outbox VALUES (?,?,?,?,'pending',NULL)",
                            [(target, day, i, f"{body}\n（日报第 {i+1}/{len(parts)} 条）") for i, body in enumerate(parts)])
     rows = db.execute("SELECT * FROM feishu_outbox WHERE target=? AND day=? ORDER BY part", (target, day)).fetchall()
@@ -223,7 +230,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--day", required=True)
     p.add_argument("--send", action="store_true", help="Actually send to configured group")
-    p.add_argument("--edition", choices=("daily", "ccu-update"), default="daily", help="Optional separately deduplicated CCU supplement")
+    p.add_argument("--edition", choices=("daily", "ccu-update", "regions"), default="daily", help="Optional separately deduplicated supplement")
     args = p.parse_args()
     db = connect(ROOT / config()["database"])
     try:

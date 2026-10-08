@@ -1,0 +1,11 @@
+{
+  "device": "all",
+  "sort_id": "top-trending",
+  "groups": {
+    "north_america": {"name": "北美", "countries": ["us", "ca", "mx"]},
+    "south_america": {"name": "南美", "countries": ["br", "ar", "cl", "co", "pe"]},
+    "europe": {"name": "欧洲", "countries": ["gb", "de", "fr", "es", "it", "pl", "nl", "se"]},
+    "southeast_asia": {"name": "东南亚", "countries": ["id", "vn", "th", "ph", "my", "sg", "mm", "kh", "la", "bn", "tl"]},
+    "japan_korea": {"name": "日韩", "countries": ["jp", "kr"]}
+  }
+}

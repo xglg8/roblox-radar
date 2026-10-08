@@ -217,6 +217,15 @@ def _collect(c, db):
             db.rollback()
             errors.append({"platform": platform, "source": source, "error": str(exc)})
             LOG.exception("Collection failed: %s/%s", platform, source)
+    if c.get("regional_enabled", False):
+        try:
+            import regional
+            day = datetime.fromisoformat(started).astimezone(timezone(timedelta(hours=c["timezone_offset_hours"]))).date().isoformat()
+            errors.extend(regional.collect(db, http, rid, day))
+        except Exception as exc:
+            db.rollback()
+            errors.append({"platform": "roblox", "source": "regional", "error": str(exc)})
+            LOG.exception("Regional collection failed")
     successes = db.execute("SELECT COUNT(*) FROM snapshots WHERE run_id=?", (rid,)).fetchone()[0]
     status = "success" if not errors else "partial" if successes else "failed"
     db.execute("UPDATE runs SET finished_at=?,status=?,errors=? WHERE id=?", (now(), status, json.dumps(errors), rid)); db.commit()
@@ -312,6 +321,9 @@ def serve(path, port, host="127.0.0.1"):
                         kind = "text/csv; charset=utf-8"
                 elif parsed.path == "/api/compare":
                     body = json.dumps(comparison(db, day), ensure_ascii=False).encode()
+                elif parsed.path == "/api/regions":
+                    from regional import report as regional_report
+                    body = json.dumps(regional_report(db, day), ensure_ascii=False).encode()
                 elif parsed.path == "/api/status":
                     body = json.dumps({"runs": [dict(r) for r in db.execute("SELECT * FROM runs ORDER BY started_at DESC LIMIT 20")],
                                        "days": [r[0] for r in db.execute("SELECT DISTINCT day FROM snapshots ORDER BY day DESC")]}, ensure_ascii=False).encode()
