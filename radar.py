@@ -350,13 +350,19 @@ def mark_growth(db, snap, rows, rules=None):
             ORDER BY ABS(julianday(observed_at)-julianday(?)),id DESC LIMIT 1''',
             (snap['platform'],snap['source'],(target-timedelta(minutes=tolerance)).isoformat(),
              (target+timedelta(minutes=tolerance)).isoformat(),at.isoformat(),target.isoformat())).fetchone()
-        baselines[key] = dict(base) if base else None
+        comparison_label = label
+        if base is None and key in ('daily', 'weekly'):
+            target_day = (date.fromisoformat(snap['day'])-timedelta(days=1 if key=='daily' else 7)).isoformat()
+            base = latest(db, snap['platform'], snap['source'], target_day)
+            if base:
+                comparison_label = '较昨日日报' if key=='daily' else '较7天前日报'
+        baselines[key] = dict(base, comparison_label=comparison_label) if base else None
         previous = {g['game_id']:g for g in entries(db,base['id'])} if base else {}
         for g in rows:
             old = previous.get(g['game_id'])
             delta = g['ccu']-old['ccu'] if old else None
             pct = delta/old['ccu']*100 if old and old['ccu'] else None
-            period = {'label':label, 'ccu_change':delta, 'ccu_pct':round(pct,2) if pct is not None else None,
+            period = {'label':comparison_label, 'ccu_change':delta, 'ccu_pct':round(pct,2) if pct is not None else None,
                       'state':'no_baseline' if not base else 'outside_previous_sample' if not old else 'zero_baseline' if not old['ccu'] else 'matched'}
             g['growth']['periods'][key] = period
             if pct is not None and pct >= rules['min_pct'] and delta >= rules['min_players']:
@@ -364,6 +370,7 @@ def mark_growth(db, snap, rows, rules=None):
                 g['growth']['alerts'].append(dict(period, period=key, level=level))
                 if g['growth']['level'] != 'strong':g['growth']['level'] = level
     return {'rules':rules, 'baselines':baselines,
+            'assessed_count':sum(any(p['state']=='matched' for p in g['growth']['periods'].values()) for g in rows),
             'flagged_count':sum(g['growth']['level']!='none' for g in rows),
             'strong_count':sum(g['growth']['level']=='strong' for g in rows)}
 

@@ -44,5 +44,22 @@ class GrowthTest(unittest.TestCase):
         self.snap('2026-10-27',[game(1,1000)],source='official')
         self.assertIsNone(radar.ranking(self.db,source='official')['growth_summary'])
 
+    def test_daily_report_fallback_is_explicitly_labelled(self):
+        self.snap('2026-10-26',[game(1,100)],hour='02')
+        self.snap('2026-10-27',[game(1,600)],hour='06')
+        r=radar.ranking(self.db)
+        self.assertEqual(r['rows'][0]['growth']['alerts'][0]['label'],'较昨日日报')
+        self.assertEqual(r['growth_summary']['baselines']['daily']['observed_at'],'2026-10-26T02:00:00+00:00')
+        self.assertIsNone(r['growth_summary']['baselines']['hourly'])
+        self.assertEqual(r['growth_summary']['assessed_count'],1)
+
+    def test_daily_and_weekly_flags_are_independent(self):
+        self.snap('2026-10-20',[game(1,2000),game(2,100)],hour='09')
+        self.snap('2026-10-26',[game(1,100),game(2,2000)],hour='09')
+        self.snap('2026-10-27',[game(1,1000),game(2,1000)],hour='09')
+        rows={g['game_id']:g for g in radar.ranking(self.db)['rows']}
+        self.assertEqual([a['period'] for a in rows['1']['growth']['alerts']],['daily'])
+        self.assertEqual([a['period'] for a in rows['2']['growth']['alerts']],['weekly'])
+
 
 if __name__=='__main__':unittest.main()
