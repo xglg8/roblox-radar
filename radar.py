@@ -118,6 +118,82 @@ def official(http):
             for g in d["games"]]
 
 
+def official_details(http, db, run_id):
+    anchor = db.execute("SELECT id FROM snapshots WHERE run_id=? AND platform='roblox' AND source='rolimons'", (run_id,)).fetchone()
+    if not anchor:
+        raise ValueError("No current-run Top 500 candidate set")
+    candidates = entries(db, anchor['id'])
+    mapping = {r['key'][9:]: r['value'] for r in db.execute("SELECT * FROM cache WHERE key LIKE 'universe:%'")}
+    # Reuse public identifiers already obtained from official charts and regional samples.
+    for r in db.execute("SELECT game_id,extra FROM entries e JOIN snapshots s ON e.snapshot_id=s.id WHERE s.platform='roblox' AND s.source='official'"):
+        uid = json.loads(r['extra']).get('universe_id')
+        if uid:
+            mapping[r['game_id']] = str(uid)
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='region_samples'").fetchone():
+        for r in db.execute('SELECT payload FROM region_samples ORDER BY observed_at'):
+            for g in json.loads(r['payload']):
+                if g.get('universe_id'):
+                    mapping[g['game_id']] = str(g['universe_id'])
+    def resolve(g):
+        gid = g['game_id']
+        if gid in mapping:
+            return gid, mapping[gid], None
+        try:
+            uid = http.get(f'https://apis.roblox.com/universes/v1/places/{gid}/universe')['universeId']
+            if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
+                raise ValueError('Invalid universe ID')
+            return gid, str(uid), None
+        except Exception as exc:
+            return gid, None, f'{gid}: {exc}'
+    resolved = [(g['game_id'], mapping[g['game_id']], None) for g in candidates if g['game_id'] in mapping]
+    pending = [g for g in candidates if g['game_id'] not in mapping]
+    for start in range(0, len(pending), 12):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            batch_results = list(pool.map(resolve, pending[start:start+12]))
+        resolved.extend(batch_results)
+        with db:
+            for gid, uid, _ in batch_results:
+                if uid:
+                    db.execute('INSERT OR REPLACE INTO cache VALUES (?,?)', ('universe:'+gid, uid))
+        if sum(uid is None for _, uid, _ in batch_results) >= 6:
+            LOG.warning('Official ID lookup unstable; stopping further lookups for this run')
+            break
+    issues = [error for _, _, error in resolved if error]
+    for gid, uid, error in resolved:
+        if uid:
+            db.execute('INSERT OR REPLACE INTO cache VALUES (?,?)', ('universe:'+gid, uid))
+    db.commit()
+    ids = sorted({uid for _, uid, _ in resolved if uid})
+    details = {}
+    for start in range(0, len(ids), 50):
+        batch = ids[start:start+50]
+        try:
+            payload = http.get('https://games.roblox.com/v1/games?universeIds='+','.join(batch))
+            measured = now()
+            for g in payload['data']:
+                if str(g['id']) in batch:
+                    count(g['playing'])
+                    details[str(g['id'])] = (g, measured)
+        except Exception as exc:
+            issues.append(f'Official detail batch {start//50+1}: {exc}')
+    rows = []
+    for gid, uid, _ in resolved:
+        if uid not in details:
+            continue
+        g, measured = details[uid]
+        if str(g.get('rootPlaceId')) != gid:
+            issues.append(f'{gid}: root place mismatch'); continue
+        rows.append(dict(game_id=gid, name=g['name'], ccu=count(g['playing']),
+                         url=f'https://www.roblox.com/games/{gid}',
+                         extra={'universe_id': int(uid), 'measured_at': measured,
+                                'visits': g.get('visits'), 'favorites': g.get('favoritedCount'),
+                                'max_players': g.get('maxPlayers'), 'genre': g.get('genre_l1')}))
+    if len(rows) != len(candidates):
+        issues.append(f'Official details coverage {len(rows)}/{len(candidates)}; missing values are not zero')
+    http.issues, http.candidate_count = issues, len(candidates)
+    return rows
+
+
 def steam(http, db):
     chart = http.get(STEAM + "ISteamChartsService/GetMostPlayedGames/v1/")["response"]
     names = {r["key"][6:]: r["value"] for r in db.execute("SELECT * FROM cache WHERE key LIKE 'steam:%'")}
@@ -196,6 +272,9 @@ def _collect(c, db):
     http = Http(c)
     jobs = [("roblox", "rolimons", lambda: rolimons(http), c["top_n"], "Rolimon’s 收录游戏中的 CCU Top；非全站穷举，源端更新时间未知"),
             ("roblox", "official", lambda: official(http), None, "Roblox 官方 Top Playing Now 返回样本，约 100 款")]
+    if c.get('official_details_enabled', False):
+        jobs.append(('roblox', 'official_details', lambda: official_details(http, db, rid), None,
+                     'Roblox 官方免费详情接口，对本轮 Rolimon’s Top 500 候选逐款核对；非独立全站榜单'))
     if c["steam_enabled"]:
         jobs.append(("steam", "official", lambda: steam(http, db), None, "Steam Most Played 榜单候选集，逐款获取当前 CCU；非 Steam 全站 CCU Top"))
     for platform, source, get_rows, limit, scope in jobs:
@@ -277,20 +356,40 @@ def comparison(db, day=None):
         return {"day": None, "platforms": [], "source_checks": []}
     platforms = []
     samples = {}
-    for platform, source in (("roblox", "rolimons"), ("steam", "official"), ("roblox", "official")):
-        s = latest(db, platform, source, day)
+    selected = {}
+    for platform, source in (("roblox", "rolimons"), ("steam", "official"), ("roblox", "official"), ('roblox', 'official_details')):
+        s = (db.execute('SELECT * FROM snapshots WHERE run_id=? AND platform=? AND source=?',
+                        (anchor['run_id'], platform, source)).fetchone() if platform == 'roblox' and anchor
+             else latest(db, platform, source, day))
         if not s:
             continue
         rows = entries(db, s["id"])
+        selected[(platform, source)] = dict(s)
         samples[(platform, source)] = rows
         platforms.append({"platform": platform, "source": source, "snapshot": dict(s), "sample_size": len(rows),
                           "sample_ccu": sum(g["ccu"] for g in rows), "top10_ccu": sum(g["ccu"] for g in rows[:10]),
                           "top100_ccu": sum(g["ccu"] for g in rows[:100]) if len(rows) >= 100 else None})
-    secondary = {g["game_id"]: g for g in samples.get(("roblox", "official"), [])}
-    checks = [{"game_id": g["game_id"], "name": g["name"], "rolimons_ccu": g["ccu"],
-               "official_ccu": secondary[g["game_id"]]["ccu"], "difference": g["ccu"] - secondary[g["game_id"]]["ccu"]}
-              for g in samples.get(("roblox", "rolimons"), []) if g["game_id"] in secondary]
-    return {"day": day, "platforms": platforms, "source_checks": checks}
+    source = 'official_details' if ('roblox', 'official_details') in samples else 'official'
+    secondary = {g['game_id']: g for g in samples.get(('roblox', source), [])}
+    official_snapshot = selected.get(('roblox', source))
+    metadata = ({r['game_id']: json.loads(r['extra']) for r in db.execute(
+        'SELECT game_id,extra FROM entries WHERE snapshot_id=?', (official_snapshot['id'],))}
+        if official_snapshot else {})
+    checks = []
+    for g in samples.get(('roblox', 'rolimons'), []):
+        official_ccu = secondary.get(g['game_id'], {}).get('ccu')
+        diff = g['ccu'] - official_ccu if official_ccu is not None else None
+        pct = diff / official_ccu * 100 if official_ccu else None
+        # A review heuristic, never a claim that one provider is wrong.
+        flagged = diff is not None and abs(diff) >= 100 and (official_ccu == 0 or abs(pct) >= 10)
+        checks.append(dict(game_id=g['game_id'], name=g['name'], rolimons_ccu=g['ccu'],
+                           official_ccu=official_ccu, difference=diff, difference_pct=pct,
+                           official_metadata=metadata.get(g['game_id']),
+                           status='missing' if diff is None else 'review' if flagged else 'matched'))
+    return {'day': day, 'platforms': platforms, 'source_checks': checks,
+            'official_source': source, 'official_snapshot': official_snapshot,
+            'matched_count': sum(g['official_ccu'] is not None for g in checks),
+            'review_count': sum(g['status'] == 'review' for g in checks)}
 
 
 def csv_data(report):

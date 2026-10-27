@@ -74,9 +74,36 @@ class RadarTest(unittest.TestCase):
         self.snap("2026-09-27", [game(1, 900)], "steam", "official")
         self.snap("2026-09-28", [game(1, 200)])
         self.snap("2026-09-28", [game(1, 180)], source="official")
+        self.db.execute("UPDATE snapshots SET run_id='2' WHERE source='official' AND platform='roblox'")
         c = radar.comparison(self.db)
         self.assertFalse(any(p["platform"] == "steam" for p in c["platforms"]))
         self.assertEqual(c["source_checks"][0]["difference"], 20)
+
+    def test_source_comparison_never_uses_older_hour(self):
+        self.snap('2026-10-27', [game(1, 200)], source='official', hour='01')
+        self.snap('2026-10-27', [game(1, 400)], hour='02')
+        row = radar.comparison(self.db)['source_checks'][0]
+        self.assertIsNone(row['official_ccu'])
+        self.assertEqual(row['status'], 'missing')
+
+    def test_official_details_maps_ids_and_preserves_free_fields(self):
+        self.snap('2026-10-27', [game(1, 400), game(2, 200)])
+        class FakeHttp:
+            def get(self, url):
+                if '/places/' in url:
+                    return {'universeId': 101 if '/1/' in url else 102}
+                return {'data': [{'id':101, 'rootPlaceId':1, 'name':'One', 'playing':0, 'visits':500, 'favoritedCount':10}]}
+        http = FakeHttp()
+        rows = radar.official_details(http, self.db, '1')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['ccu'], 0)
+        self.assertEqual(rows[0]['extra']['visits'], 500)
+        self.assertTrue(http.issues)
+        radar.save_snapshot(self.db, '1', 'roblox', 'official_details', '2026-10-27', '2026-10-27T09:01:00+00:00', rows, 1, 'test')
+        c = radar.comparison(self.db)
+        self.assertEqual(c['matched_count'], 1)
+        self.assertEqual(c['review_count'], 1)
+        self.assertIsNone(c['source_checks'][0]['difference_pct'])
 
     def test_csv_unicode_and_formula_escaping(self):
         self.snap("2026-09-28", [game(1, 100, '=HYPERLINK("bad")'), game(2, 50, "中文游戏")])

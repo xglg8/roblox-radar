@@ -3,6 +3,7 @@
   "top_n": 500,
   "timezone_offset_hours": 8,
   "steam_enabled": false,
+  "official_details_enabled": true,
   "regional_enabled": true,
   "genre_trends_enabled": true,
   "request_interval_seconds": 0.35,
