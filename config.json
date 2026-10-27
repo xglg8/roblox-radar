@@ -2,6 +2,7 @@
   "database": "data/radar.sqlite3",
   "top_n": 500,
   "growth_alerts": {"min_pct": 20, "min_players": 100, "strong_pct": 50, "strong_players": 500},
+  "new_game_alerts": {"max_age_days": 30, "min_ccu": 1000, "rising_min_ccu": 500, "recent_seen_days": 7},
   "timezone_offset_hours": 8,
   "steam_enabled": false,
   "official_details_enabled": true,

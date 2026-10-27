@@ -183,6 +183,8 @@ def official_details(http, db, run_id):
         g, measured = details[uid]
         if str(g.get('rootPlaceId')) != gid:
             issues.append(f'{gid}: root place mismatch'); continue
+        from new_games import remember
+        remember(db, g, measured)
         rows.append(dict(game_id=gid, name=g['name'], ccu=count(g['playing']),
                          url=f'https://www.roblox.com/games/{gid}',
                          extra={'universe_id': int(uid), 'measured_at': measured,
@@ -190,6 +192,7 @@ def official_details(http, db, run_id):
                                 'max_players': g.get('maxPlayers'), 'genre': g.get('genre_l1')}))
     if len(rows) != len(candidates):
         issues.append(f'Official details coverage {len(rows)}/{len(candidates)}; missing values are not zero')
+    db.commit()
     http.issues, http.candidate_count = issues, len(candidates)
     return rows
 
@@ -392,7 +395,9 @@ def ranking(db, platform="roblox", source="rolimons", day=None):
                         "ccu_change": g["ccu"] - previous["ccu"] if previous else None,
                         "ccu_pct": round((g["ccu"] / previous["ccu"] - 1) * 100, 2) if previous and previous["ccu"] else None}
     growth = mark_growth(db, snap, rows) if platform=='roblox' and source=='rolimons' else None
-    return {"snapshot": dict(snap), "baselines": baselines, "rows": rows, 'growth_summary':growth}
+    from new_games import annotate
+    novelty = annotate(db, snap, rows, config().get('new_game_alerts')) if growth else None
+    return {"snapshot": dict(snap), "baselines": baselines, "rows": rows, 'growth_summary':growth, 'new_game_summary':novelty}
 
 
 def comparison(db, day=None):

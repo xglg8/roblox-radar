@@ -5,6 +5,7 @@
 !regional.py
 !genre_trends.py
 !external_sources.py
+!new_games.py
 !regions.json
 !scheduler.py
 !dashboard.html
