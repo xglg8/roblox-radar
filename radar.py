@@ -365,10 +365,19 @@ def serve(path, port, host="127.0.0.1"):
     ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
+def hourly_config(c, current=None):
+    current = current or datetime.now(timezone(timedelta(hours=c['timezone_offset_hours'])))
+    result = dict(c)
+    if current.hour != 10:
+        result.update(regional_enabled=False, genre_trends_enabled=False)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("collect")
+    sub.add_parser("hourly", help="Collect CCU; also collect regions/genres at 10:00; never send Feishu")
     sub.add_parser("daily", help="Collect and send the configured Feishu daily report")
     p = sub.add_parser("serve"); p.add_argument("--port", type=int, default=8765)
     p.add_argument("--host", default="127.0.0.1", help="Use 0.0.0.0 only behind a reverse proxy")
@@ -382,7 +391,9 @@ def main():
         serve(path, args.port, args.host); return 0
     db = connect(path)
     try:
-        if args.command in ("collect", "daily"):
+        if args.command in ("collect", "daily", "hourly"):
+            if args.command == "hourly":
+                c = hourly_config(c)
             result = collect(c, db); print(json.dumps(result))
             if args.command == "daily":
                 from feishu import deliver, settings
