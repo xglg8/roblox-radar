@@ -277,6 +277,12 @@ def _collect(c, db):
                      'Roblox 官方免费详情接口，对本轮 Rolimon’s Top 500 候选逐款核对；非独立全站榜单'))
     if c["steam_enabled"]:
         jobs.append(("steam", "official", lambda: steam(http, db), None, "Steam Most Played 榜单候选集，逐款获取当前 CCU；非 Steam 全站 CCU Top"))
+    from external_sources import collect as collect_external, PROVIDERS
+    for source in c.get('external_sources', []):
+        if source not in PROVIDERS:
+            raise ValueError('Unknown external provider: '+source)
+        jobs.append(('roblox', source, lambda source=source: collect_external(source, http, db, rid), None,
+                     PROVIDERS[source][0]+' 公开数据；本轮Top500候选，非独立榜单；保留提供方时间'))
     for platform, source, get_rows, limit, scope in jobs:
         http.issues, http.candidate_count = [], None
         observed = now()
@@ -386,7 +392,9 @@ def comparison(db, day=None):
                            official_ccu=official_ccu, difference=diff, difference_pct=pct,
                            official_metadata=metadata.get(g['game_id']),
                            status='missing' if diff is None else 'review' if flagged else 'matched'))
-    return {'day': day, 'platforms': platforms, 'source_checks': checks,
+    from external_sources import comparisons
+    external = comparisons(db, anchor, checks)
+    return {'day': day, 'platforms': platforms, 'source_checks': checks, 'external_sources': external,
             'official_source': source, 'official_snapshot': official_snapshot,
             'matched_count': sum(g['official_ccu'] is not None for g in checks),
             'review_count': sum(g['status'] == 'review' for g in checks)}
