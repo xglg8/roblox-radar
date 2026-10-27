@@ -291,7 +291,7 @@ def _collect(c, db):
             LOG.info("Collecting %s/%s", platform, source)
             rows = get_rows()
             if not rows:
-                raise ValueError("Empty upstream response")
+                raise ValueError('; '.join(http.issues) if http.issues else "Empty upstream response")
             if http.issues:
                 scope += f"；当前 CCU 缺失 {len(http.issues)} 款，已从样本中排除"
             sid = save_snapshot(db, rid, platform, source, day, observed, rows, limit or len(rows), scope, http.candidate_count)
