@@ -1,6 +1,7 @@
 {
   "database": "data/radar.sqlite3",
   "top_n": 500,
+  "growth_alerts": {"min_pct": 20, "min_players": 100, "strong_pct": 50, "strong_players": 500},
   "timezone_offset_hours": 8,
   "steam_enabled": false,
   "official_details_enabled": true,

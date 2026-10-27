@@ -335,6 +335,39 @@ def entries(db, sid):
     return [dict(r) for r in db.execute("SELECT game_id,name,ccu,rank,url FROM entries WHERE snapshot_id=? ORDER BY rank", (sid,))]
 
 
+def mark_growth(db, snap, rows, rules=None):
+    rules = rules or config().get('growth_alerts', {'min_pct':20, 'min_players':100, 'strong_pct':50, 'strong_players':500})
+    periods = [('hourly', '1小时', 1, 20), ('daily', '24小时', 24, 60), ('weekly', '7天', 168, 60)]
+    baselines = {}
+    for g in rows:
+        g['growth'] = {'level':'none', 'alerts':[], 'periods':{}}
+    at = datetime.fromisoformat(snap['observed_at'])
+    for key, label, hours, tolerance in periods:
+        target = at-timedelta(hours=hours)
+        base = db.execute('''SELECT * FROM snapshots WHERE platform=? AND source=?
+            AND julianday(observed_at) BETWEEN julianday(?) AND julianday(?)
+            AND julianday(observed_at)<julianday(?)
+            ORDER BY ABS(julianday(observed_at)-julianday(?)),id DESC LIMIT 1''',
+            (snap['platform'],snap['source'],(target-timedelta(minutes=tolerance)).isoformat(),
+             (target+timedelta(minutes=tolerance)).isoformat(),at.isoformat(),target.isoformat())).fetchone()
+        baselines[key] = dict(base) if base else None
+        previous = {g['game_id']:g for g in entries(db,base['id'])} if base else {}
+        for g in rows:
+            old = previous.get(g['game_id'])
+            delta = g['ccu']-old['ccu'] if old else None
+            pct = delta/old['ccu']*100 if old and old['ccu'] else None
+            period = {'label':label, 'ccu_change':delta, 'ccu_pct':round(pct,2) if pct is not None else None,
+                      'state':'no_baseline' if not base else 'outside_previous_sample' if not old else 'zero_baseline' if not old['ccu'] else 'matched'}
+            g['growth']['periods'][key] = period
+            if pct is not None and pct >= rules['min_pct'] and delta >= rules['min_players']:
+                level = 'strong' if pct >= rules['strong_pct'] and delta >= rules['strong_players'] else 'rising'
+                g['growth']['alerts'].append(dict(period, period=key, level=level))
+                if g['growth']['level'] != 'strong':g['growth']['level'] = level
+    return {'rules':rules, 'baselines':baselines,
+            'flagged_count':sum(g['growth']['level']!='none' for g in rows),
+            'strong_count':sum(g['growth']['level']=='strong' for g in rows)}
+
+
 def ranking(db, platform="roblox", source="rolimons", day=None):
     snap = latest(db, platform, source, day)
     if not snap:
@@ -351,7 +384,8 @@ def ranking(db, platform="roblox", source="rolimons", day=None):
                         "rank_change": previous["rank"] - g["rank"] if previous else None,
                         "ccu_change": g["ccu"] - previous["ccu"] if previous else None,
                         "ccu_pct": round((g["ccu"] / previous["ccu"] - 1) * 100, 2) if previous and previous["ccu"] else None}
-    return {"snapshot": dict(snap), "baselines": baselines, "rows": rows}
+    growth = mark_growth(db, snap, rows) if platform=='roblox' and source=='rolimons' else None
+    return {"snapshot": dict(snap), "baselines": baselines, "rows": rows, 'growth_summary':growth}
 
 
 def comparison(db, day=None):
